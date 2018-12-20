@@ -1,14 +1,14 @@
 /**************************************************************
-   WiFiManager is a library for the ESP8266/Arduino platform
-   (https://github.com/esp8266/Arduino) to enable easy
-   configuration and reconfiguration of WiFi credentials using a Captive Portal
-   inspired by:
-   http://www.esp8266.com/viewtopic.php?f=29&t=2520
-   https://github.com/chriscook8/esp-arduino-apboot
-   https://github.com/esp8266/Arduino/tree/master/libraries/DNSServer/examples/CaptivePortalAdvanced
-   Built by AlexT https://github.com/tzapu
-   Licensed under MIT license
- **************************************************************/
+WiFiManager is a library for the ESP8266/Arduino platform
+(https://github.com/esp8266/Arduino) to enable easy
+configuration and reconfiguration of WiFi credentials using a Captive Portal
+inspired by:
+http://www.esp8266.com/viewtopic.php?f=29&t=2520
+https://github.com/chriscook8/esp-arduino-apboot
+https://github.com/esp8266/Arduino/tree/master/libraries/DNSServer/examples/CaptivePortalAdvanced
+Built by AlexT https://github.com/tzapu
+Licensed under MIT license
+**************************************************************/
 
 #include "WiFiManager.h"
 
@@ -61,6 +61,10 @@ const char* WiFiManagerParameter::getCustomHTML() {
 }
 
 WiFiManager::WiFiManager() {
+	//Start preferences
+	preferences.begin("incubator", false);
+	_offline = preferences.getUInt("offline", false);
+	preferences.end();
 }
 
 void WiFiManager::addParameter(WiFiManagerParameter *p) {
@@ -80,11 +84,7 @@ void WiFiManager::addParameter(WiFiManagerParameter *p) {
 
 void WiFiManager::setupConfigPortal() {
   dnsServer.reset(new DNSServer());
-#ifdef ESP8266
-  server.reset(new ESP8266WebServer(80));
-#else
-  server.reset(new WebServer(80));
-#endif
+  server.reset(new ESP32WebServer(80));
 
   DEBUG_WM(F(""));
   _configPortalStart = millis();
@@ -124,6 +124,7 @@ void WiFiManager::setupConfigPortal() {
   server->on("/", std::bind(&WiFiManager::handleRoot, this));
   server->on("/wifi", std::bind(&WiFiManager::handleWifi, this, true));
   server->on("/0wifi", std::bind(&WiFiManager::handleWifi, this, false));
+  server->on("/offline", std::bind(&WiFiManager::handleOffline, this));
   server->on("/wifisave", std::bind(&WiFiManager::handleWifiSave, this));
   server->on("/i", std::bind(&WiFiManager::handleInfo, this));
   server->on("/r", std::bind(&WiFiManager::handleReset, this));
@@ -135,38 +136,40 @@ void WiFiManager::setupConfigPortal() {
 
 }
 
-boolean WiFiManager::autoConnect() {
+int WiFiManager::autoConnect() {
   String ssid = "ESP" + String(ESP_getChipId());
   return autoConnect(ssid.c_str(), NULL);
 }
 
-boolean WiFiManager::autoConnect(char const *apName, char const *apPassword) {
-  DEBUG_WM(F(""));
-  DEBUG_WM(F("AutoConnect"));
+int WiFiManager::autoConnect(char const *apName, char const *apPassword) {
+  if (!_offline)
+  {
+	DEBUG_WM(F(""));
+	DEBUG_WM(F("AutoConnect"));
 
-  // read eeprom for ssid and pass
-  //String ssid = getSSID();
-  //String pass = getPassword();
+	// read eeprom for ssid and pass
+	//String ssid = getSSID();
+	//String pass = getPassword();
 
-  // attempt to connect; should it fail, fall back to AP
-  WiFi.mode(WIFI_STA);
+	// attempt to connect; should it fail, fall back to AP
+	WiFi.mode(WIFI_STA);
 
-  if (connectWifi("", "") == WL_CONNECTED)   {
-    DEBUG_WM(F("IP Address:"));
-    DEBUG_WM(WiFi.localIP());
-    //connected
-    return true;
+	if (connectWifi("", "") == WL_CONNECTED)   {
+		DEBUG_WM(F("IP Address:"));
+		DEBUG_WM(WiFi.localIP());
+		//connected
+		return 1;
+	}
+
+	return -1;
   }
-
-  return startConfigPortal(apName, apPassword);
+  else{
+	  return 0;
+  }
 }
 
 boolean WiFiManager::configPortalHasTimeout(){
-#if defined(ESP8266)
-    if(_configPortalTimeout == 0 || wifi_softap_get_station_num() > 0){
-#else
     if(_configPortalTimeout == 0){  // TODO
-#endif
       _configPortalStart = millis(); // kludge, bump configportal start time to skew timeouts
       return false;
     }
@@ -198,6 +201,7 @@ boolean  WiFiManager::startConfigPortal(char const *apName, char const *apPasswo
 
     // check if timeout
     if(configPortalHasTimeout()) break;
+	if(_offline) break;
 
     //DNS
     dnsServer->processNextRequest();
@@ -264,14 +268,7 @@ int WiFiManager::connectWifi(String ssid, String pass) {
   } else {
     if (WiFi.SSID()) {
       DEBUG_WM("Using last saved values, should be faster");
-#if defined(ESP8266)
-      //trying to fix connection in progress hanging
-      ETS_UART_INTR_DISABLE();
-      wifi_station_disconnect();
-      ETS_UART_INTR_ENABLE();
-#else
       esp_wifi_disconnect();
-#endif
 
       WiFi.begin();
     } else {
@@ -282,6 +279,8 @@ int WiFiManager::connectWifi(String ssid, String pass) {
   int connRes = waitForConnectResult();
   DEBUG_WM ("Connection result: ");
   DEBUG_WM ( connRes );
+  DEBUG_WM ("Connected to: ");
+  DEBUG_WM (WiFi.SSID());
   //not connected, WPS enabled, no pass - first attempt
   if (_tryWPS && connRes != WL_CONNECTED && pass == "") {
     startWPS();
@@ -315,14 +314,7 @@ uint8_t WiFiManager::waitForConnectResult() {
 }
 
 void WiFiManager::startWPS() {
-#if defined(ESP8266)
-  DEBUG_WM("START WPS");
-  WiFi.beginWPSConfig();
-  DEBUG_WM("END WPS");
-#else
-  // TODO
   DEBUG_WM("ESP32 WPS TODO");
-#endif
 }
 
   String WiFiManager::getSSID() {
@@ -352,6 +344,11 @@ String WiFiManager::getConfigPortalSSID() {
 void WiFiManager::resetSettings() {
   DEBUG_WM(F("settings invalidated"));
   DEBUG_WM(F("THIS MAY CAUSE AP NOT TO START UP PROPERLY. YOU NEED TO COMMENT IT OUT AFTER ERASING THE DATA."));
+  //Clear preferences
+  preferences.begin("incubator", false);
+  preferences.remove("offline");
+  preferences.end();
+  _offline = false;
   // TODO On ESP32 this does not erase the SSID and password. See
   // https://github.com/espressif/arduino-esp32/issues/400
   // For now, use "make erase_flash".
@@ -487,11 +484,7 @@ void WiFiManager::handleWifi(boolean scan) {
           rssiQ += quality;
           item.replace("{v}", WiFi.SSID(indices[i]));
           item.replace("{r}", rssiQ);
-#if defined(ESP8266)
-          if (WiFi.encryptionType(indices[i]) != ENC_TYPE_NONE) {
-#else
           if (WiFi.encryptionType(indices[i]) != WIFI_AUTH_OPEN) {
-#endif
             item.replace("{i}", "l");
           } else {
             item.replace("{i}", "");
@@ -579,6 +572,37 @@ void WiFiManager::handleWifi(boolean scan) {
   DEBUG_WM(F("Sent config page"));
 }
 
+/** Wifi config page handler */
+void WiFiManager::handleOffline() {
+  //Update offline parameter
+  _offline = true;
+  //Start preferences
+  preferences.begin("incubator", false);
+  preferences.putUInt("offline", _offline);
+  preferences.end();
+  
+  DEBUG_WM(F("Off-line mode"));
+
+  String page = FPSTR(HTTP_HEAD);
+  page.replace("{v}", "Offline");
+  page += FPSTR(HTTP_SCRIPT);
+  page += FPSTR(HTTP_STYLE);
+  page += _customHeadElement;
+  page += FPSTR(HTTP_HEAD_END);
+  page += FPSTR(HTTP_OFFLINE);
+  page += FPSTR(HTTP_END);
+
+  server->sendHeader("Content-Length", String(page.length()));
+  server->send(200, "text/html", page);
+
+  DEBUG_WM(F("Sent offline page"));
+}
+
+boolean WiFiManager::printOffline() {
+  boolean tmp = _offline;
+  return tmp;
+}
+
 /** Handle the WLAN save form and redirect to WLAN config page again */
 void WiFiManager::handleWifiSave() {
   DEBUG_WM(F("WiFi save"));
@@ -653,23 +677,13 @@ void WiFiManager::handleInfo() {
   page += ESP_getChipId();
   page += F("</dd>");
   page += F("<dt>Flash Chip ID</dt><dd>");
-#if defined(ESP8266)
-  page += ESP.getFlashChipId();
-#else
-  // TODO
   page += F("TODO");
-#endif
   page += F("</dd>");
   page += F("<dt>IDE Flash Size</dt><dd>");
   page += ESP.getFlashChipSize();
   page += F(" bytes</dd>");
   page += F("<dt>Real Flash Size</dt><dd>");
-#if defined(ESP8266)
-  page += ESP.getFlashChipRealSize();
-#else
-  // TODO
   page += F("TODO");
-#endif
   page += F(" bytes</dd>");
   page += F("<dt>Soft AP IP</dt><dd>");
   page += WiFi.softAPIP().toString();
@@ -707,11 +721,7 @@ void WiFiManager::handleReset() {
 
   DEBUG_WM(F("Sent reset page"));
   delay(5000);
-#if defined(ESP8266)
-  ESP.reset();
-#else
   ESP.restart();
-#endif
   delay(2000);
 }
 
@@ -776,8 +786,8 @@ void WiFiManager::setRemoveDuplicateAPs(boolean removeDuplicates) {
 template <typename Generic>
 void WiFiManager::DEBUG_WM(Generic text) {
   if (_debug) {
-    Serial.print("*WM: ");
-    Serial.println(text);
+    //Serial.print("*WM: ");
+    //Serial.println(text);
   }
 }
 
