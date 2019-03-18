@@ -62,7 +62,7 @@ const char* WiFiManagerParameter::getCustomHTML() {
 
 WiFiManager::WiFiManager() {
 	//Start preferences
-	preferences.begin("incubator", false);
+	preferences.begin("Device", false);
 	_offline = preferences.getUInt("offline", false);
 	preferences.end();
 }
@@ -142,8 +142,13 @@ int WiFiManager::autoConnect() {
 }
 
 int WiFiManager::autoConnect(char const *apName, char const *apPassword) {
-  if (!_offline)
-  {
+	
+	preferences.begin("Device", false);
+	_offline = preferences.getUInt("offline", false);
+	preferences.end();
+
+	if (!_offline)
+    {
 	DEBUG_WM(F(""));
 	DEBUG_WM(F("AutoConnect"));
 
@@ -164,7 +169,11 @@ int WiFiManager::autoConnect(char const *apName, char const *apPassword) {
 	return -1;
   }
   else{
-	  return 0;
+		WiFi.mode(WIFI_AP_STA);
+		WiFi.softAP(apName, apPassword);
+		DEBUG_WM(F("soft IP Address:"));
+		DEBUG_WM(WiFi.softAPIP());
+		return 0;
   }
 }
 
@@ -345,7 +354,7 @@ void WiFiManager::resetSettings() {
   DEBUG_WM(F("settings invalidated"));
   DEBUG_WM(F("THIS MAY CAUSE AP NOT TO START UP PROPERLY. YOU NEED TO COMMENT IT OUT AFTER ERASING THE DATA."));
   //Clear preferences
-  preferences.begin("incubator", false);
+  preferences.begin("Device", false);
   preferences.remove("offline");
   preferences.end();
   _offline = false;
@@ -353,7 +362,9 @@ void WiFiManager::resetSettings() {
   // https://github.com/espressif/arduino-esp32/issues/400
   // For now, use "make erase_flash".
   WiFi.disconnect(true);
-  //delay(200);
+  // Ugly workaround
+  WiFi.begin("0", "0");
+  delay(200);
 }
 void WiFiManager::setTimeout(unsigned long seconds) {
   setConfigPortalTimeout(seconds);
@@ -577,10 +588,10 @@ void WiFiManager::handleOffline() {
   //Update offline parameter
   _offline = true;
   //Start preferences
-  preferences.begin("incubator", false);
+  preferences.begin("Device", false);
   preferences.putUInt("offline", _offline);
   preferences.end();
-  
+
   DEBUG_WM(F("Off-line mode"));
 
   String page = FPSTR(HTTP_HEAD);
@@ -786,8 +797,8 @@ void WiFiManager::setRemoveDuplicateAPs(boolean removeDuplicates) {
 template <typename Generic>
 void WiFiManager::DEBUG_WM(Generic text) {
   if (_debug) {
-    //Serial.print("*WM: ");
-    //Serial.println(text);
+    Serial.print("*WM: ");
+    Serial.println(text);
   }
 }
 
